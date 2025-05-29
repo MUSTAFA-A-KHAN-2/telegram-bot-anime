@@ -198,6 +198,45 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, client *mong
 				log.Printf("Failed to send rules message: %v", err)
 			}
 			return
+		case "word":
+			chatState.RLock()
+			wordEmpty := chatState.Word == ""
+			leadExpired := time.Since(chatState.LeadTimestamp) >= 120*time.Second
+			chatState.RUnlock()
+
+			if wordEmpty || leadExpired {
+				word, err := model.GetRandomWord()
+				if err != nil {
+					view.SendMessage(bot, chatID, "Oops! Unable to fetch a word right now. Please try again later.")
+					return
+				}
+
+				buttons := tgbotapi.NewInlineKeyboardMarkup(
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData(" Hint 💡 ", "hint"),
+					),
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData(" Reveal 🔍 ", "reveal"),
+					),
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData(" New Word 🔄 ", "newword"),
+					),
+				)
+
+				chatState.Lock()
+				chatState.Word = word
+				chatState.User = message.From.ID
+				chatState.Leader = message.From.FirstName
+				chatState.LeadTimestamp = time.Now()
+				chatState.Unlock()
+
+				view.SendMessageWithButtons(bot, chatID, "A new word is ready! Use the buttons below to play.", buttons)
+				return
+			} else {
+				sentMsg, err := view.SendMessage(bot, chatID, "A game is currently in progress.")
+				deleteWarningMessage(bot, message, sentMsg, err)
+				return
+			}
 		}
 
 		aiModeMutex.Lock()
@@ -628,6 +667,88 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 		buttons := createSingleButtonKeyboard("🌟 Claim Leadership 🙋", "explain")
 		view.SendMessageWithButtons(bot, callback.Message.Chat.ID, fmt.Sprintf("%s refused to lead -> %s \n", callback.From.FirstName, chatState.Word), buttons)
 		chatState.reset()
+
+	case "hint":
+		chatState.RLock()
+		lastHint := chatState.LastHintTimestamp
+		lastHintType := chatState.LastHintTypeSent
+		wordEmpty := chatState.Word == ""
+		chatState.RUnlock()
+
+		if wordEmpty {
+			bot.AnswerCallbackQuery(tgbotapi.NewCallbackWithAlert(callback.ID, "No active game right now. Please start a new game."))
+			return
+		}
+
+		if !lastHint.IsZero() && time.Since(lastHint) < 8*time.Second {
+			bot.AnswerCallbackQuery(tgbotapi.NewCallbackWithAlert(callback.ID, "Please wait a moment before requesting another hint."))
+			return
+		}
+
+		chatState.RLock()
+		var hint string
+		if lastHintType == 0 {
+			hint = model.GenerateMeaningHint(chatState.Word)
+		} else {
+			hint = model.GenerateMeaningHint(chatState.Word)
+			hint = hint + "\n" + model.GenerateHint(chatState.Word)
+			hint = hint + "\n" + model.GenerateAuroraHint(chatState.Word)
+		}
+		chatState.RUnlock()
+
+		view.SendMessage(bot, chatID, hint)
+
+		chatState.Lock()
+		chatState.LastHintTimestamp = time.Now()
+		chatState.LastHintTypeSent = 1 - lastHintType
+		chatState.Unlock()
+
+		bot.AnswerCallbackQuery(tgbotapi.NewCallback(callback.ID, "Hint sent."))
+
+	case "reveal":
+		chatState.RLock()
+		word := chatState.Word
+		leadTime := chatState.LeadTimestamp
+		chatState.RUnlock()
+
+		if time.Since(leadTime) >= 6*time.Second {
+			view.SendMessage(bot, chatID, fmt.Sprintf("The word was: %s", word))
+			chatState.reset()
+			bot.AnswerCallbackQuery(tgbotapi.NewCallback(callback.ID, "Word revealed."))
+		} else {
+			bot.AnswerCallbackQuery(tgbotapi.NewCallbackWithAlert(callback.ID, "Please wait before revealing the word."))
+		}
+
+	case "newword":
+		chatState.Lock()
+		word, err := model.GetRandomWord()
+		if err != nil {
+			chatState.Unlock()
+			bot.AnswerCallbackQuery(tgbotapi.NewCallbackWithAlert(callback.ID, "Failed to get a new word. Please try again later."))
+			return
+		}
+		chatState.Word = word
+		chatState.User = callback.From.ID
+		chatState.Leader = callback.From.FirstName
+		chatState.LeadTimestamp = time.Now()
+		chatState.LastHintTimestamp = time.Time{}
+		chatState.LastHintTypeSent = 0
+		chatState.Unlock()
+
+		buttons := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData(" Hint 💡 ", "hint"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData(" Reveal 🔍 ", "reveal"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData(" New Word 🔄 ", "newword"),
+			),
+		)
+
+		view.SendMessageWithButtons(bot, chatID, "A new word is ready! Use the buttons below to play.", buttons)
+		bot.AnswerCallbackQuery(tgbotapi.NewCallback(callback.ID, "New word generated."))
 
 	default:
 		chatState.RLock()
