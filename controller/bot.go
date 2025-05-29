@@ -198,6 +198,7 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, client *mong
 				log.Printf("Failed to send rules message: %v", err)
 			}
 			return
+		case "start":
 		case "word":
 			chatState.RLock()
 			wordEmpty := chatState.Word == ""
@@ -220,6 +221,7 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, client *mong
 					),
 					tgbotapi.NewInlineKeyboardRow(
 						tgbotapi.NewInlineKeyboardButtonData(" New Word 🔄 ", "newword"),
+						tgbotapi.NewInlineKeyboardButtonURL("add to group ➕", "https://t.me/Croco_rebirth_bot?startgroup=true"),
 					),
 				)
 
@@ -298,7 +300,7 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, client *mong
 			ID := strconv.Itoa(message.From.ID)
 			userID, err := strconv.Atoi(ID)
 			if err != nil {
-				sentMsg, err := view.SendMessage(bot, chatID, "Invalid user ID. Please enter a valid numeric user ID.")
+				sentMsg, err := view.SendMessage(bot, chatID, "Invalid user")
 				deleteWarningMessage(bot, message, sentMsg, err)
 				return
 			}
